@@ -1,5 +1,7 @@
-yaml
 name: Generar APK
+
+# Esta receta arma sola todo el proyecto de Android alrededor de index.html (el juego)
+# y genera el APK. Para actualizar el juego, solo hay que reemplazar index.html.
 
 on:
   push:
@@ -21,6 +23,204 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: Armar el proyecto
+        run: |
+          test -f index.html || { echo "Falta subir index.html a la raiz del repositorio"; exit 1; }
+          mkdir -p $(dirname settings.gradle)
+          cat > settings.gradle <<'FIN'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "TanquesDeCuentas"
+          include ':app'
+          FIN
+          mkdir -p $(dirname build.gradle)
+          cat > build.gradle <<'FIN'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          FIN
+          mkdir -p $(dirname gradle.properties)
+          cat > gradle.properties <<'FIN'
+          org.gradle.jvmargs=-Xmx2048m
+          android.useAndroidX=true
+          FIN
+          mkdir -p $(dirname app/build.gradle)
+          cat > app/build.gradle <<'FIN'
+          plugins { id 'com.android.application' }
+
+          android {
+              namespace 'ar.nicolas.tanques'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId 'ar.nicolas.tanques'
+                  minSdk 24
+                  targetSdk 34
+                  // Cada compilación en GitHub sube el número de versión, así el teléfono acepta la actualización.
+                  versionCode((System.getenv('GITHUB_RUN_NUMBER') ?: '1') as int)
+                  versionName "1.${System.getenv('GITHUB_RUN_NUMBER') ?: '0'}"
+              }
+
+              // Firma fija: así cada APK nuevo se instala ENCIMA del anterior sin borrar el avance del juego.
+              signingConfigs {
+                  fija {
+                      storeFile file('tanques.keystore')
+                      storePassword 'tanques2026'
+                      keyAlias 'tanques'
+                      keyPassword 'tanques2026'
+                  }
+              }
+              buildTypes {
+                  debug { signingConfig signingConfigs.fija }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          FIN
+          mkdir -p $(dirname app/src/main/AndroidManifest.xml)
+          cat > app/src/main/AndroidManifest.xml <<'FIN'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                  android:label="Tanques de Cuentas"
+                  android:icon="@drawable/ic_launcher"
+                  android:allowBackup="true"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:screenOrientation="portrait"
+                      android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          FIN
+          mkdir -p $(dirname app/src/main/java/ar/nicolas/tanques/MainActivity.java)
+          cat > app/src/main/java/ar/nicolas/tanques/MainActivity.java <<'FIN'
+          package ar.nicolas.tanques;
+
+          import android.app.Activity;
+          import android.graphics.Color;
+          import android.os.Bundle;
+          import android.view.WindowManager;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+
+          // La app es una ventana que muestra el juego (index.html, que va adentro del APK y funciona sin internet).
+          public class MainActivity extends Activity {
+              private WebView web;
+
+              @Override
+              protected void onCreate(Bundle saved) {
+                  super.onCreate(saved);
+                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                  getWindow().setStatusBarColor(Color.parseColor("#18263a"));
+                  getWindow().setNavigationBarColor(Color.parseColor("#18263a"));
+
+                  web = new WebView(this);
+                  web.setBackgroundColor(Color.parseColor("#18263a"));
+                  WebSettings s = web.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);          // guarda medallas, nivel y progreso de sumas
+                  s.setMediaPlaybackRequiresUserGesture(false);
+                  s.setAllowFileAccess(true);
+                  web.setWebViewClient(new WebViewClient());
+                  setContentView(web);
+
+                  if (saved != null) web.restoreState(saved);
+                  else web.loadUrl("file:///android_asset/index.html");
+              }
+
+              @Override
+              protected void onSaveInstanceState(Bundle out) {
+                  super.onSaveInstanceState(out);
+                  web.saveState(out);
+              }
+
+              @Override
+              protected void onPause() { super.onPause(); web.onPause(); }
+
+              @Override
+              protected void onResume() { super.onResume(); web.onResume(); }
+          }
+          FIN
+          mkdir -p $(dirname app/src/main/res/drawable/ic_launcher.xml)
+          cat > app/src/main/res/drawable/ic_launcher.xml <<'FIN'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="100" android:viewportHeight="100">
+              <path android:fillColor="#18263a" android:pathData="M22,0h56a22,22 0 0 1 22,22v56a22,22 0 0 1 -22,22h-56a22,22 0 0 1 -22,-22v-56a22,22 0 0 1 22,-22z"/>
+              <path android:fillColor="#ffd23f" android:pathData="M72,24m-12,0a12,12 0 1,0 24,0a12,12 0 1,0 -24,0"/>
+              <path android:fillColor="#5aa646" android:pathData="M0,72h100v6a22,22 0 0 1 -22,22h-56a22,22 0 0 1 -22,-22z"/>
+              <path android:fillColor="#26803c" android:pathData="M52,44L80,30L83,35L55,49z"/>
+              <path android:fillColor="#3fae5a" android:pathData="M36,48a14,14 0 0 1 28,0z"/>
+              <path android:fillColor="#3fae5a" android:pathData="M27,48h46a5,5 0 0 1 5,5v5a5,5 0 0 1 -5,5h-46a5,5 0 0 1 -5,-5v-5a5,5 0 0 1 5,-5z"/>
+              <path android:fillColor="#2b2b2b" android:pathData="M25,62h50a7,7 0 0 1 0,14h-50a7,7 0 0 1 0,-14z"/>
+          </vector>
+          FIN
+          mkdir -p app/src/main/assets
+          cp index.html app/src/main/assets/index.html
+      - name: Preparar firma
+        run: |
+          cat > firma.txt <<'FIN'
+          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
+          PROPHO9Zy7cvuwIEca1TZ4kCAicQ
+          FIN
+          base64 -d firma.txt > app/tanques.keystore
       - name: Compilar
         run: gradle assembleDebug --no-daemon
       - name: Preparar archivo
@@ -29,7 +229,7 @@ jobs:
         with:
           name: TanquesDeCuentas
           path: TanquesDeCuentas.apk
-      - name: Publicar para descargar desde el teléfono
+      - name: Publicar para descargar desde el telefono
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "v1.${{ github.run_number }}" TanquesDeCuentas.apk --title "Tanques de Cuentas v1.${{ github.run_number }}" --notes "Bajá TanquesDeCuentas.apk desde el teléfono e instalalo.
+        run: gh release create "v1.${{ github.run_number }}" TanquesDeCuentas.apk --title "Tanques de Cuentas v1.${{ github.run_number }}" --notes "Baja TanquesDeCuentas.apk desde el telefono e instalalo."
